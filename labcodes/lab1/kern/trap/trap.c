@@ -46,6 +46,12 @@ idt_init(void) {
       *     You don't know the meaning of this instruction? just google it! and check the libs/x86.h to know more.
       *     Notice: the argument of lidt is idt_pd. try to find it!
       */
+	extern uintptr_t __vectors[];
+	int i = 0 ;
+	for ( ; i < 256 ; i++)
+		SETGATE(idt[i], 0, KERNEL_CS, __vectors[i], 3) ;
+	SETGATE(idt[T_SYSCALL], 1, KERNEL_CS, __vectors[T_SYSCALL], 0) ;
+	lidt(&idt_pd) ;
 }
 
 static const char *
@@ -138,6 +144,9 @@ print_regs(struct pushregs *regs) {
 static void
 trap_dispatch(struct trapframe *tf) {
     char c;
+	static int ticks_count = 0; 
+	static struct trapframe tf_buff;
+	static struct trapframe* tf_buff_address = NULL;
 
     switch (tf->tf_trapno) {
     case IRQ_OFFSET + IRQ_TIMER:
@@ -147,6 +156,8 @@ trap_dispatch(struct trapframe *tf) {
          * (2) Every TICK_NUM cycle, you can print some info using a funciton, such as print_ticks().
          * (3) Too Simple? Yes, I think so!
          */
+		if ((++ticks_count) >= 100)
+			print_ticks(), ticks_count = 0 ;
         break;
     case IRQ_OFFSET + IRQ_COM1:
         c = cons_getc();
@@ -158,8 +169,25 @@ trap_dispatch(struct trapframe *tf) {
         break;
     //LAB1 CHALLENGE 1 : YOUR CODE you should modify below codes.
     case T_SWITCH_TOU:
+		if (tf->tf_cs == USER_CS) break;
+		memcpy(&tf_buff, tf, sizeof(struct trapframe));
+		tf_buff.tf_cs 		= USER_CS;
+		tf_buff.tf_ds 		= USER_DS;
+		tf_buff.tf_es 		= USER_DS;
+		tf_buff.tf_ss 		= USER_DS;
+		tf_buff.tf_esp 		= ((uint32_t)(tf)) - 8 + sizeof(struct trapframe);
+		tf_buff.tf_eflags  |= FL_IOPL_MASK;
+		*(((uint32_t*)(tf))-1) = ((uint32_t)(&tf_buff));
+		break;
     case T_SWITCH_TOK:
-        panic("T_SWITCH_** ??\n");
+		if (tf->tf_cs == KERNEL_CS) break;
+		tf->tf_cs 		= KERNEL_CS;
+		tf->tf_ds 		= KERNEL_DS;
+		tf->tf_es 		= KERNEL_DS;
+		tf->tf_eflags  &= ~FL_IOPL_MASK;
+		tf_buff_address = tf->tf_esp + 8 - sizeof(struct trapframe);
+		memcpy(tf_buff_address, tf, sizeof(struct trapframe));
+		*(((uint32_t*)(tf))-1) = ((uint32_t)(tf_buff_address));
         break;
     case IRQ_OFFSET + IRQ_IDE1:
     case IRQ_OFFSET + IRQ_IDE2:
@@ -183,5 +211,7 @@ void
 trap(struct trapframe *tf) {
     // dispatch based on what type of trap occurred
     trap_dispatch(tf);
+
+
 }
 

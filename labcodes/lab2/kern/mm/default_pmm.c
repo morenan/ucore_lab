@@ -69,74 +69,90 @@ static void
 default_init_memmap(struct Page *base, size_t n) {
     assert(n > 0);
     struct Page *p = base;
-    for (; p != base + n; p ++) {
+    for (; p != base + n; p++) {
         assert(PageReserved(p));
         p->flags = p->property = 0;
         set_page_ref(p, 0);
+
+        SetPageProperty(p);
+        list_add_before(&free_list, &(p->page_link));
     }
     base->property = n;
-    SetPageProperty(base);
     nr_free += n;
-    list_add(&free_list, &(base->page_link));
 }
 
 static struct Page *
 default_alloc_pages(size_t n) {
     assert(n > 0);
-    if (n > nr_free) {
-        return NULL;
+    if (n > nr_free) return NULL;
+    
+    struct Page*  page      = NULL ;
+    struct Page*  page_temp = NULL ;
+    list_entry_t* let       = list_next(&free_list) ;
+    list_entry_t* let_next  = NULL ;
+ 
+    for ( ; let != &free_list ; let = list_next(let)) {
+    	page = le2page(let, page_link);
+    	if (page->property >= n) {
+			int i = 0 ;
+    		for ( ; i < n ; i++) {
+    			let_next = list_next(let) ;
+    			page_temp = le2page(let_next, page_link) ;
+    			SetPageReserved(page_temp);
+    			ClearPageProperty(page_temp);
+    			list_del(let);
+    			let = let_next;
+    		}
+    		if (page->property > n) {
+    			page_temp = le2page(let, page_link) ;
+    			page_temp->property = page->property - n ;
+    		}
+    		ClearPageProperty(page) ;
+    		SetPageReserved(page);
+    		nr_free -= n;
+    		return page ;
+    	}
     }
-    struct Page *page = NULL;
-    list_entry_t *le = &free_list;
-    while ((le = list_next(le)) != &free_list) {
-        struct Page *p = le2page(le, page_link);
-        if (p->property >= n) {
-            page = p;
-            break;
-        }
-    }
-    if (page != NULL) {
-        list_del(&(page->page_link));
-        if (page->property > n) {
-            struct Page *p = page + n;
-            p->property = page->property - n;
-            list_add(&free_list, &(p->page_link));
-    }
-        nr_free -= n;
-        ClearPageProperty(page);
-    }
-    return page;
+    return NULL ;
 }
-
+    
 static void
-default_free_pages(struct Page *base, size_t n) {
+default_free_pages(struct Page *page_base, size_t n) {
     assert(n > 0);
-    struct Page *p = base;
-    for (; p != base + n; p ++) {
-        assert(!PageReserved(p) && !PageProperty(p));
-        p->flags = 0;
-        set_page_ref(p, 0);
-    }
-    base->property = n;
-    SetPageProperty(base);
-    list_entry_t *le = list_next(&free_list);
-    while (le != &free_list) {
-        p = le2page(le, page_link);
-        le = list_next(le);
-        if (base + base->property == p) {
-            base->property += p->property;
-            ClearPageProperty(p);
-            list_del(&(p->page_link));
-        }
-        else if (p + p->property == base) {
-            p->property += base->property;
-            ClearPageProperty(base);
-            base = p;
-            list_del(&(p->page_link));
-        }
-    }
-    nr_free += n;
-    list_add(&free_list, &(base->page_link));
+    assert(PageReserved(page_base));
+    
+    list_entry_t* let = list_next(&free_list);
+    struct Page* page = page_base ;
+    
+    for ( ; let != &free_list ; let = list_next(let)) 
+    	if (le2page(let, page_link) > page_base) break ;
+    for ( ; page < page_base+n ; page++)
+    	list_add_before(let, &(page->page_link)) ;
+
+   	page_base->flags = 0 ;
+   	page_base->property = n ;
+   	set_page_ref(page_base, 0) ;
+   	ClearPageProperty(page_base) ;
+    SetPageProperty(page_base) ;
+    
+   	page = le2page(let, page_link) ;
+   	if (page_base + n == page) {
+   		page_base->property += page->property ;
+   		page->property = 0 ;
+   	}
+   	
+   	let = list_prev(&free_list) ;
+   	if (le2page(let, page_link) == page_base - 1) {
+   		for ( ; let != &free_list ; let = list_prev(let)) {
+   			page = le2page(let, page_link) ;
+   			if (page->property != 0) {
+   				page->property += page_base->property ;
+   				page_base->property = 0 ; 
+   				break ;
+   			}
+   		}
+   	}
+   	nr_free += n ;
 }
 
 static size_t
